@@ -1,0 +1,78 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: hysteria-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-hysteria}
+      POSTGRES_PASSWORD: ${DB_PASS:-hysteria123}
+      POSTGRES_DB: ${DB_NAME:-hysteriadb}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - hysteria-network
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    container_name: hysteria-backend
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-hysteria}
+      DB_PASS: ${DB_PASS:-hysteria123}
+      DB_NAME: ${DB_NAME:-hysteriadb}
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-this}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      PORT: 3100
+    ports:
+      - "3100:3100"
+    depends_on:
+      - postgres
+    networks:
+      - hysteria-network
+    restart: unless-stopped
+    volumes:
+      - /var/log/hysteria.log:/var/log/hysteria.log:ro
+
+  log-monitor:
+    build: ./backend
+    container_name: hysteria-log-monitor
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-hysteria}
+      DB_PASS: ${DB_PASS:-hysteria123}
+      DB_NAME: ${DB_NAME:-hysteriadb}
+      HYSTERIA_LOG_PATH: ${HYSTERIA_LOG_PATH:-/var/log/hysteria.log}
+    depends_on:
+      - postgres
+    networks:
+      - hysteria-network
+    restart: unless-stopped
+    volumes:
+      - /var/log/hysteria.log:/var/log/hysteria.log:ro
+    command: ["node", "log-monitor.js"]
+
+  frontend:
+    build: ./frontend
+    container_name: hysteria-frontend
+    environment:
+      VITE_API_BASE: ${VITE_API_BASE:-http://localhost:3100/api}
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - hysteria-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  hysteria-network:
+    driver: bridge
