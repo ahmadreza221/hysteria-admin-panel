@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -eo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -52,22 +52,47 @@ SUCCESS_STEPS=0
 
 # 1. Prompt for user input
 print_step "0%" "Prompting for user input"
-{
-  read -p "Enter your domain name (e.g. asdasdvpn.asdir.xyz): " DOMAIN
-  read -p "Enter your GitHub repository URL [https://github.com/ahmadreza221/hysteria-admin-panel.git]: " REPO_URL
-  REPO_URL=${REPO_URL:-https://github.com/ahmadreza221/hysteria-admin-panel.git}
-  read -p "Enter your email address for SSL certificate [admin@example.com]: " EMAIL
-  EMAIL=${EMAIL:-admin@example.com}
-  read -p "Enable SSL with Let's Encrypt? (yes/no) [yes]: " ENABLE_SSL
-  ENABLE_SSL=${ENABLE_SSL:-yes}
-  read -p "Enter frontend port [3000]: " FRONTEND_PORT
-  FRONTEND_PORT=${FRONTEND_PORT:-3000}
-  read -p "Enter backend port [3100]: " BACKEND_PORT
-  BACKEND_PORT=${BACKEND_PORT:-3100}
-  read -p "Enter any additional ports to open (comma separated, optional): " EXTRA_PORTS
-} 2>>install_error.log
+echo "About to ask for domain..."
+read -p "Enter your domain name (e.g. asdasdvpn.asdir.xyz): " DOMAIN
+echo "About to ask for repo URL..."
+read -p "Enter your GitHub repository URL [https://github.com/ahmadreza221/hysteria-admin-panel.git]: " REPO_URL
+REPO_URL=${REPO_URL:-https://github.com/ahmadreza221/hysteria-admin-panel.git}
+echo "About to ask for email..."
+read -p "Enter your email address for SSL certificate [admin@example.com]: " EMAIL
+EMAIL=${EMAIL:-admin@example.com}
+echo "About to ask for SSL..."
+read -p "Enable SSL with Let's Encrypt? (yes/no) [yes]: " ENABLE_SSL
+ENABLE_SSL=${ENABLE_SSL:-yes}
+echo "About to ask for frontend port..."
+read -p "Enter frontend port [3000]: " FRONTEND_PORT
+FRONTEND_PORT=${FRONTEND_PORT:-3000}
+echo "About to ask for backend port..."
+read -p "Enter backend port [3100]: " BACKEND_PORT
+BACKEND_PORT=${BACKEND_PORT:-3100}
+echo "About to ask for extra ports..."
+read -p "Enter any additional ports to open (comma separated, optional): " EXTRA_PORTS
 STEP_STATUS[Prompt]=0
 print_status $?
+
+# Prompt for installing PostgreSQL on the host
+print_info "Do you want to install PostgreSQL directly on the server (outside Docker)? (yes/no) [no]"
+read -p "Install PostgreSQL on host? (yes/no) [no]: " INSTALL_PG
+INSTALL_PG=${INSTALL_PG:-no}
+
+if [[ "$INSTALL_PG" == "yes" ]]; then
+  print_step "10%" "Installing PostgreSQL on host"
+  {
+    sudo apt update
+    sudo apt install -y postgresql postgresql-contrib
+    sudo systemctl enable postgresql
+    sudo systemctl start postgresql
+    # Create user and database if not exist
+    sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='hysteria'" | grep -q 1 || sudo -u postgres psql -c "CREATE USER hysteria WITH PASSWORD 'hysteria123';"
+    sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='hysteriadb'" | grep -q 1 || sudo -u postgres psql -c "CREATE DATABASE hysteriadb OWNER hysteria;"
+  } 2>>install_error.log
+  STEP_STATUS[PostgresHost]=$?
+  print_status $?
+fi
 
 # 2. Install dependencies
 print_step "15%" "Installing dependencies"
