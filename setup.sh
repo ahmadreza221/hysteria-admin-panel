@@ -25,19 +25,19 @@ print_status() {
 }
 
 print_info() {
-  echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 print_success() {
-  echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
 print_warning() {
-  echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
 print_error() {
-  echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1"
 }
 
 log_error() {
@@ -74,27 +74,24 @@ read -p "Enter any additional ports to open (comma separated, optional): " EXTRA
 STEP_STATUS[Prompt]=0
 print_status $?
 
-# Prompt for installing PostgreSQL on the host
-print_info "Do you want to install PostgreSQL directly on the server (outside Docker)? (yes/no) [no]"
-read -p "Install PostgreSQL on host? (yes/no) [no]: " INSTALL_PG
-INSTALL_PG=${INSTALL_PG:-no}
+# 2. Install PostgreSQL on host (automatic, no prompt)
+print_step "10%" "Installing PostgreSQL on host"
+{
+  sudo apt update
+  sudo apt install -y postgresql postgresql-contrib
+  sudo systemctl enable postgresql
+  sudo systemctl start postgresql
+  # Create user and database if not exist
+  sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='hysteria'" | grep -q 1 || sudo -u postgres psql -c "CREATE USER hysteria WITH PASSWORD 'hysteria123';"
+  sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='hysteriadb'" | grep -q 1 || sudo -u postgres psql -c "CREATE DATABASE hysteriadb OWNER hysteria;"
+  # Grant privileges
+  sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE hysteriadb TO hysteria;"
+  sudo -u postgres psql -c "ALTER USER hysteria CREATEDB;"
+} 2>>install_error.log
+STEP_STATUS[PostgresHost]=$?
+print_status $?
 
-if [[ "$INSTALL_PG" == "yes" ]]; then
-  print_step "10%" "Installing PostgreSQL on host"
-  {
-    sudo apt update
-    sudo apt install -y postgresql postgresql-contrib
-    sudo systemctl enable postgresql
-    sudo systemctl start postgresql
-    # Create user and database if not exist
-    sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='hysteria'" | grep -q 1 || sudo -u postgres psql -c "CREATE USER hysteria WITH PASSWORD 'hysteria123';"
-    sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='hysteriadb'" | grep -q 1 || sudo -u postgres psql -c "CREATE DATABASE hysteriadb OWNER hysteria;"
-  } 2>>install_error.log
-  STEP_STATUS[PostgresHost]=$?
-  print_status $?
-fi
-
-# 2. Install dependencies
+# 3. Install dependencies
 print_step "15%" "Installing dependencies"
 {
   sudo apt update && sudo apt upgrade -y
@@ -112,7 +109,7 @@ print_step "15%" "Installing dependencies"
 STEP_STATUS[Dependencies]=$?
 print_status $?
 
-# 3. Clone project
+# 4. Clone project
 print_step "30%" "Cloning repository"
 {
   git clone "$REPO_URL"
@@ -122,10 +119,10 @@ print_step "30%" "Cloning repository"
 STEP_STATUS[Clone]=$?
 print_status $?
 
-# 4. Setup .env
+# 5. Setup .env
 print_step "45%" "Setting up environment variables"
 {
-  cat > .env << EOF
+    cat > .env << EOF
 # Database Configuration
 DB_USER=hysteria
 DB_PASS=hysteria123
@@ -148,7 +145,7 @@ EOF
 STEP_STATUS[Env]=$?
 print_status $?
 
-# 5. Build and run Docker
+# 6. Build and run Docker
 print_step "60%" "Building and running Docker containers"
 {
   sudo docker-compose up -d --build
@@ -156,7 +153,7 @@ print_step "60%" "Building and running Docker containers"
 STEP_STATUS[Docker]=$?
 print_status $?
 
-# 6. Nginx config
+# 7. Nginx config
 print_step "75%" "Configuring Nginx reverse proxy"
 {
   sudo tee /etc/nginx/sites-available/hysteria-admin-panel <<EOF
@@ -189,12 +186,13 @@ EOF
 STEP_STATUS[Nginx]=$?
 print_status $?
 
-# 7. Firewall
+# 8. Firewall
 print_step "85%" "Configuring firewall"
 {
-  sudo ufw allow 22/tcp
-  sudo ufw allow 80/tcp
-  sudo ufw allow 443/tcp
+        sudo ufw allow 22/tcp
+        sudo ufw allow 80/tcp
+        sudo ufw allow 443/tcp
+        sudo ufw allow 5432/tcp  # PostgreSQL port
   sudo ufw allow $FRONTEND_PORT/tcp
   sudo ufw allow $BACKEND_PORT/tcp
   if [[ -n "$EXTRA_PORTS" ]]; then
@@ -203,12 +201,12 @@ print_step "85%" "Configuring firewall"
       sudo ufw allow $(echo $port | xargs)/tcp
     done
   fi
-  sudo ufw --force enable
+        sudo ufw --force enable
 } 2>>../install_error.log
 STEP_STATUS[Firewall]=$?
 print_status $?
 
-# 8. SSL
+# 9. SSL
 if [[ "$ENABLE_SSL" == "yes" ]]; then
   print_step "95%" "Obtaining SSL certificate with Let's Encrypt"
   {
@@ -232,7 +230,7 @@ PERCENT=$((SUCCESS_STEPS * 100 / ${#STEP_STATUS[@]}))
 # Print summary
 echo "\n---------------------------------------------"
 echo "Installation summary:"
-for key in Prompt Dependencies Clone Env Docker Nginx Firewall SSL; do
+for key in Prompt PostgresHost Dependencies Clone Env Docker Nginx Firewall SSL; do
   if [[ -n "${STEP_STATUS[$key]+x}" ]]; then
     if [ "${STEP_STATUS[$key]}" -eq 0 ]; then
       echo -e "$key: ${GREEN}Success${NC}"
