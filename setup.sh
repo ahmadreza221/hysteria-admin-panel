@@ -1,5 +1,4 @@
 #!/bin/bash
-
 set -euo pipefail
 
 # Colors for output
@@ -9,116 +8,99 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Function to print colored output
+# Helper functions for progress and status
+print_step() {
+  local percent=$1
+  local message=$2
+  echo -ne "[$percent] $message... "
+}
+
 print_status() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+  local status=$1
+  if [ "$status" -eq 0 ]; then
+    echo -e "${GREEN}✔️${NC}"
+  else
+    echo -e "${RED}❌${NC}"
+  fi
+}
+
+print_info() {
+  echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+  echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+  echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+  echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Function to check if running as root
-check_root() {
-    if [[ $EUID -eq 0 ]]; then
-        print_error "This script should not be run as root"
-        exit 1
-    fi
+log_error() {
+  local step=$1
+  local log=$2
+  echo "[$step] FAILED: $log" >> install_error.log
 }
 
-# Function to detect OS
-detect_os() {
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        OS=$NAME
-        VER=$VERSION_ID
-    else
-        print_error "Cannot detect OS"
-        exit 1
-    fi
-}
+# Step status tracking
+declare -A STEP_STATUS
+SUCCESS_STEPS=0
 
-# Function to install Docker on Ubuntu/Debian
-install_docker_ubuntu() {
-    print_status "Installing Docker on Ubuntu/Debian..."
-    
-    # Update package list
-    sudo apt-get update
-    
-    # Install prerequisites
-    sudo apt-get install -y \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release
-    
-    # Add Docker's official GPG key
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    
-    # Add Docker repository
-    echo \
-        "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
-        $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    
-    # Install Docker
-    sudo apt-get update
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io
-    
-    # Add user to docker group
-    sudo usermod -aG docker $USER
-    
-    print_success "Docker installed successfully"
-}
+# 1. Prompt for user input
+print_step "0%" "Prompting for user input"
+{
+  read -p "Enter your domain name (e.g. asdasdvpn.asdir.xyz): " DOMAIN
+  read -p "Enter your GitHub repository URL [https://github.com/ahmadreza221/hysteria-admin-panel.git]: " REPO_URL
+  REPO_URL=${REPO_URL:-https://github.com/ahmadreza221/hysteria-admin-panel.git}
+  read -p "Enter your email address for SSL certificate [admin@example.com]: " EMAIL
+  EMAIL=${EMAIL:-admin@example.com}
+  read -p "Enable SSL with Let's Encrypt? (yes/no) [yes]: " ENABLE_SSL
+  ENABLE_SSL=${ENABLE_SSL:-yes}
+  read -p "Enter frontend port [3000]: " FRONTEND_PORT
+  FRONTEND_PORT=${FRONTEND_PORT:-3000}
+  read -p "Enter backend port [3100]: " BACKEND_PORT
+  BACKEND_PORT=${BACKEND_PORT:-3100}
+  read -p "Enter any additional ports to open (comma separated, optional): " EXTRA_PORTS
+} 2>>install_error.log
+STEP_STATUS[Prompt]=0
+print_status $?
 
-# Function to install Docker Compose
-install_docker_compose() {
-    print_status "Installing Docker Compose..."
-    
-    # Download Docker Compose
-    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    
-    # Make it executable
-    sudo chmod +x /usr/local/bin/docker-compose
-    
-    print_success "Docker Compose installed successfully"
-}
+# 2. Install dependencies
+print_step "15%" "Installing dependencies"
+{
+  sudo apt update && sudo apt upgrade -y
+  sudo apt install -y git curl nginx ufw
+  curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+  sudo apt install -y nodejs
+  curl -fsSL https://get.docker.com | sudo bash
+  sudo apt install -y docker-compose
+  sudo systemctl enable docker
+  sudo systemctl start docker
+  if [[ "$ENABLE_SSL" == "yes" ]]; then
+    sudo apt install -y certbot python3-certbot-nginx
+  fi
+} 2>>install_error.log
+STEP_STATUS[Dependencies]=$?
+print_status $?
 
-# Function to get domain from user
-get_domain() {
-    if [[ -n "${DOMAIN:-}" ]]; then
-        print_status "Using domain from environment: $DOMAIN"
-        return
-    fi
-    
-    echo
-    print_status "Please enter your domain name for the Hysteria admin panel:"
-    echo "Example: vpn.example.com"
-    echo "Leave empty to use localhost (for development)"
-    echo
-    read -p "Domain name: " DOMAIN
-    
-    if [[ -z "$DOMAIN" ]]; then
-        DOMAIN="localhost"
-        print_warning "Using localhost for development"
-    else
-        print_success "Domain set to: $DOMAIN"
-    fi
-}
+# 3. Clone project
+print_step "30%" "Cloning repository"
+{
+  git clone "$REPO_URL"
+  REPO_DIR=$(basename "$REPO_URL" .git)
+  cd "$REPO_DIR"
+} 2>>../install_error.log
+STEP_STATUS[Clone]=$?
+print_status $?
 
-# Function to create environment file
-create_env_file() {
-    print_status "Creating environment configuration..."
-    
-    cat > .env << EOF
+# 4. Setup .env
+print_step "45%" "Setting up environment variables"
+{
+  cat > .env << EOF
 # Database Configuration
 DB_USER=hysteria
 DB_PASS=hysteria123
@@ -128,163 +110,131 @@ DB_NAME=hysteriadb
 JWT_SECRET=$(openssl rand -hex 32)
 
 # Frontend Configuration
-FRONTEND_URL=http://${DOMAIN}:3000
-VITE_API_BASE=http://${DOMAIN}:3100/api
+FRONTEND_URL=https://$DOMAIN:$FRONTEND_PORT
+VITE_API_BASE=https://$DOMAIN:$BACKEND_PORT/api
 
 # Log Monitor Configuration
 HYSTERIA_LOG_PATH=/var/log/hysteria.log
 
 # Domain Configuration
-DOMAIN=${DOMAIN}
+DOMAIN=$DOMAIN
 EOF
-    
-    print_success "Environment file created"
-}
+} 2>>../install_error.log
+STEP_STATUS[Env]=$?
+print_status $?
 
-# Function to setup firewall
-setup_firewall() {
-    print_status "Setting up firewall rules..."
-    
-    if command -v ufw &> /dev/null; then
-        sudo ufw allow 22/tcp
-        sudo ufw allow 80/tcp
-        sudo ufw allow 443/tcp
-        sudo ufw allow 3000/tcp
-        sudo ufw allow 3100/tcp
-        sudo ufw --force enable
-        print_success "UFW firewall configured"
-    elif command -v iptables &> /dev/null; then
-        print_warning "iptables detected. Please manually configure firewall rules:"
-        echo "  - Allow ports: 22, 80, 443, 3000, 3100"
+# 5. Build and run Docker
+print_step "60%" "Building and running Docker containers"
+{
+  sudo docker-compose up -d --build
+} 2>>../install_error.log
+STEP_STATUS[Docker]=$?
+print_status $?
+
+# 6. Nginx config
+print_step "75%" "Configuring Nginx reverse proxy"
+{
+  sudo tee /etc/nginx/sites-available/hysteria-admin-panel <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $DOMAIN;
+
+    location / {
+        proxy_pass http://localhost:$FRONTEND_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /api/ {
+        proxy_pass http://localhost:$BACKEND_PORT/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+  sudo ln -sf /etc/nginx/sites-available/hysteria-admin-panel /etc/nginx/sites-enabled/hysteria-admin-panel
+  sudo rm -f /etc/nginx/sites-enabled/default
+  sudo nginx -t && sudo systemctl reload nginx
+} 2>>../install_error.log
+STEP_STATUS[Nginx]=$?
+print_status $?
+
+# 7. Firewall
+print_step "85%" "Configuring firewall"
+{
+  sudo ufw allow 22/tcp
+  sudo ufw allow 80/tcp
+  sudo ufw allow 443/tcp
+  sudo ufw allow $FRONTEND_PORT/tcp
+  sudo ufw allow $BACKEND_PORT/tcp
+  if [[ -n "$EXTRA_PORTS" ]]; then
+    IFS=',' read -ra PORTS <<< "$EXTRA_PORTS"
+    for port in "${PORTS[@]}"; do
+      sudo ufw allow $(echo $port | xargs)/tcp
+    done
+  fi
+  sudo ufw --force enable
+} 2>>../install_error.log
+STEP_STATUS[Firewall]=$?
+print_status $?
+
+# 8. SSL
+if [[ "$ENABLE_SSL" == "yes" ]]; then
+  print_step "95%" "Obtaining SSL certificate with Let's Encrypt"
+  {
+    sudo certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL"
+  } 2>>../install_error.log
+  STEP_STATUS[SSL]=$?
+  print_status $?
+else
+  STEP_STATUS[SSL]=0
+fi
+
+# Calculate summary
+SUCCESS_STEPS=0
+for key in "${!STEP_STATUS[@]}"; do
+  if [ "${STEP_STATUS[$key]}" -eq 0 ]; then
+    ((SUCCESS_STEPS++))
+  fi
+}
+PERCENT=$((SUCCESS_STEPS * 100 / ${#STEP_STATUS[@]}))
+
+# Print summary
+echo "\n---------------------------------------------"
+echo "Installation summary:"
+for key in Prompt Dependencies Clone Env Docker Nginx Firewall SSL; do
+  if [[ -n "${STEP_STATUS[$key]+x}" ]]; then
+    if [ "${STEP_STATUS[$key]}" -eq 0 ]; then
+      echo -e "$key: ${GREEN}Success${NC}"
     else
-        print_warning "No firewall detected. Please configure your firewall manually."
+      echo -e "$key: ${RED}Failed${NC}"
     fi
+  fi
 }
+echo "Overall: $PERCENT% complete"
 
-# Function to create log file
-create_log_file() {
-    print_status "Creating Hysteria log file..."
-    
-    sudo touch /var/log/hysteria.log
-    sudo chmod 644 /var/log/hysteria.log
-    
-    print_success "Log file created at /var/log/hysteria.log"
-}
+if [ $PERCENT -lt 100 ]; then
+  echo -e "\nSome steps failed. Please check install_error.log for details."
+  echo "--- install_error.log ---"
+  cat ../install_error.log
+fi
 
-# Function to start services
-start_services() {
-    print_status "Starting Hysteria Admin Panel services..."
-    
-    # Build and start containers
-    docker-compose up -d --build
-    
-    # Wait for services to be ready
-    print_status "Waiting for services to start..."
-    sleep 30
-    
-    # Check service health
-    if curl -f http://localhost:3100/api/health &> /dev/null; then
-        print_success "Backend service is healthy"
-    else
-        print_warning "Backend service health check failed"
-    fi
-    
-    if curl -f http://localhost:3000/health &> /dev/null; then
-        print_success "Frontend service is healthy"
-    else
-        print_warning "Frontend service health check failed"
-    fi
-}
-
-# Function to display final information
-display_final_info() {
-    echo
-    echo "=========================================="
-    print_success "Hysteria Admin Panel Installation Complete!"
-    echo "=========================================="
-    echo
-    echo "🌐 Admin Panel URL: http://${DOMAIN}:3000"
-    echo "🔧 Backend API: http://${DOMAIN}:3100"
-    echo "🗄️  Database: localhost:5432"
-    echo
-    echo "📋 Default Login Credentials:"
-    echo "   Email: assiyaee@gmail.com"
-    echo "   Username: Admin"
-    echo "   Password: Ahmad2016"
-    echo
-    echo "📁 Important Files:"
-    echo "   - Environment: .env"
-    echo "   - Logs: /var/log/hysteria.log"
-    echo "   - Docker Compose: docker-compose.yml"
-    echo
-    echo "🔧 Useful Commands:"
-    echo "   View logs: docker-compose logs -f"
-    echo "   Stop services: docker-compose down"
-    echo "   Restart services: docker-compose restart"
-    echo "   Update: git pull && docker-compose up -d --build"
-    echo
-    echo "⚠️  Security Notes:"
-    echo "   - Change default passwords in production"
-    echo "   - Update JWT_SECRET in .env file"
-    echo "   - Configure SSL/TLS for production use"
-    echo
-    print_success "Installation completed successfully!"
-}
-
-# Main installation function
-main() {
-    echo "=========================================="
-    echo "Hysteria v2 Admin Panel Installer"
-    echo "=========================================="
-    echo
-    
-    # Check if not running as root
-    check_root
-    
-    # Detect OS
-    detect_os
-    print_status "Detected OS: $OS $VER"
-    
-    # Check if Docker is installed
-    if ! command -v docker &> /dev/null; then
-        print_status "Docker not found. Installing..."
-        if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
-            install_docker_ubuntu
-        else
-            print_error "Unsupported OS: $OS"
-            print_error "Please install Docker manually and run this script again"
-            exit 1
-        fi
-    else
-        print_success "Docker is already installed"
-    fi
-    
-    # Check if Docker Compose is installed
-    if ! command -v docker-compose &> /dev/null; then
-        print_status "Docker Compose not found. Installing..."
-        install_docker_compose
-    else
-        print_success "Docker Compose is already installed"
-    fi
-    
-    # Get domain from user
-    get_domain
-    
-    # Create environment file
-    create_env_file
-    
-    # Setup firewall
-    setup_firewall
-    
-    # Create log file
-    create_log_file
-    
-    # Start services
-    start_services
-    
-    # Display final information
-    display_final_info
-}
-
-# Run main function
-main "$@"
+# Display final information
+print_info "\nSetup complete!"
+if [[ "$ENABLE_SSL" == "yes" ]]; then
+  print_success "Visit: https://$DOMAIN"
+else
+  print_success "Visit: http://$DOMAIN"
+fi
+print_info "Project directory: $REPO_DIR"
+print_info "You can manage your containers with: sudo docker-compose [up|down|logs]"
+print_info "Default Admin Email: assiyaee@gmail.com | Username: Admin | Password: Ahmad2016"
+print_info "Important files: .env, /var/log/hysteria.log, docker-compose.yml"
+print_info "Useful commands: docker-compose logs -f, docker-compose down, docker-compose restart, git pull && docker-compose up -d --build"
+print_warning "Change default passwords and JWT_SECRET in production. Configure SSL/TLS for production use."
+echo "---------------------------------------------"
