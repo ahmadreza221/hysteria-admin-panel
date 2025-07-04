@@ -119,6 +119,22 @@ print_step "30%" "Cloning repository"
 STEP_STATUS[Clone]=$?
 print_status $?
 
+# 4.5. Frontend dependencies & build
+print_step "40%" "Installing frontend dependencies and building"
+{
+  cd frontend
+  sudo apt install -y build-essential
+  if [ -f package-lock.json ]; then
+    npm ci
+  else
+    npm install
+  fi
+  npm run build
+  cd ..
+} 2>>../install_error.log
+STEP_STATUS[Frontend]=$?
+print_status $?
+
 # 5. Setup .env
 print_step "45%" "Setting up environment variables"
 {
