@@ -60,17 +60,25 @@ REPO_URL=${REPO_URL:-https://github.com/ahmadreza221/hysteria-admin-panel.git}
 echo "About to ask for email..."
 read -p "Enter your email address for SSL certificate [admin@example.com]: " EMAIL
 EMAIL=${EMAIL:-admin@example.com}
+
+# Confirm domain and email
+print_info "Domain set to: $DOMAIN"
+print_info "Email set to: $EMAIL"
+echo "Are these correct? (y/n)"
+read -p "Confirm (y/n): " CONFIRM
+if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
+  print_error "Aborted by user."
+  exit 1
+fi
+
 echo "About to ask for SSL..."
 read -p "Enable SSL with Let's Encrypt? (yes/no) [yes]: " ENABLE_SSL
 ENABLE_SSL=${ENABLE_SSL:-yes}
-echo "About to ask for frontend port..."
-read -p "Enter frontend port [3000]: " FRONTEND_PORT
-FRONTEND_PORT=${FRONTEND_PORT:-3000}
-echo "About to ask for backend port..."
-read -p "Enter backend port [3100]: " BACKEND_PORT
-BACKEND_PORT=${BACKEND_PORT:-3100}
-echo "About to ask for extra ports..."
-read -p "Enter any additional ports to open (comma separated, optional): " EXTRA_PORTS
+
+# Set default ports (no prompt)
+FRONTEND_PORT=3000
+BACKEND_PORT=3100
+EXTRA_PORTS="80,443,8080"
 STEP_STATUS[Prompt]=0
 print_status $?
 
@@ -115,6 +123,8 @@ print_step "30%" "Cloning repository"
   git clone "$REPO_URL"
   REPO_DIR=$(basename "$REPO_URL" .git)
   cd "$REPO_DIR"
+  # Fix permissions for the project directory
+  sudo chown -R $USER:$USER .
 } 2>>../install_error.log
 STEP_STATUS[Clone]=$?
 print_status $?
@@ -124,11 +134,15 @@ print_step "40%" "Installing frontend dependencies and building"
 {
   cd frontend
   sudo apt install -y build-essential
-  if [ -f package-lock.json ]; then
-    npm ci
-  else
+  # Ensure terser is installed
+  if ! npm list terser >/dev/null 2>&1; then
+    npm install terser --save-dev
+  fi
+  # Ensure package-lock.json exists
+  if [ ! -f package-lock.json ]; then
     npm install
   fi
+  npm ci
   npm run build
   cd ..
 } 2>>../install_error.log
@@ -208,9 +222,10 @@ print_step "85%" "Configuring firewall"
         sudo ufw allow 22/tcp
         sudo ufw allow 80/tcp
         sudo ufw allow 443/tcp
+        sudo ufw allow 8080/tcp
         sudo ufw allow 5432/tcp  # PostgreSQL port
-  sudo ufw allow $FRONTEND_PORT/tcp
-  sudo ufw allow $BACKEND_PORT/tcp
+        sudo ufw allow $FRONTEND_PORT/tcp
+        sudo ufw allow $BACKEND_PORT/tcp
   if [[ -n "$EXTRA_PORTS" ]]; then
     IFS=',' read -ra PORTS <<< "$EXTRA_PORTS"
     for port in "${PORTS[@]}"; do
